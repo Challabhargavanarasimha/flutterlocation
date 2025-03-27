@@ -115,15 +115,14 @@ class BackgroundNotification(
         }
     }
 
-    private fun hasNotificationPermission(): Boolean {
-        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.checkSelfPermission(
-                    context,
-                    Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-        } else {
-            true // Permission not required before Android 13
-        }
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+    ContextCompat.checkSelfPermission(
+    context,
+    Manifest.permission.POST_NOTIFICATIONS
+    ) == PackageManager.PERMISSION_GRANTED) {
+        notificationManager.notify(notificationId, builder.build())
+    } else {
+        Log.w(TAG, "Cannot show notification - POST_NOTIFICATIONS permission not granted")
     }
 
     fun updateOptions(options: NotificationOptions, isVisible: Boolean) {
