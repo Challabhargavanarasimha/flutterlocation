@@ -204,23 +204,35 @@ class FlutterLocationService : Service(), PluginRegistry.RequestPermissionsResul
         }
     }
 
+    // **FIXED ERROR: Implementing onRequestPermissionsResult**
+    override fun onRequestPermissionsResult(
+            requestCode: Int,
+            permissions: Array<out String>,
+            grantResults: IntArray
+    ): Boolean {
+        when (requestCode) {
+            REQUEST_PERMISSIONS_REQUEST_CODE -> {
+                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    Log.d(TAG, "Location permission granted.")
+                    return true
+                } else {
+                    Log.d(TAG, "Location permission denied.")
+                    return false
+                }
+            }
+            REQUEST_NOTIFICATION_PERMISSION -> {
+                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    Log.d(TAG, "Notification permission granted.")
+                    return true
+                } else {
+                    Log.d(TAG, "Notification permission denied.")
+                }
+            }
+        }
+        return false
+    }
+
     inner class LocalBinder : Binder() {
         fun getService(): FlutterLocationService = this@FlutterLocationService
     }
-}
-override fun onRequestPermissionsResult(
-        requestCode: Int,
-        permissions: Array<out String>,
-        grantResults: IntArray
-): Boolean {
-    if (requestCode == REQUEST_PERMISSIONS_REQUEST_CODE) {
-        if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            Log.d(TAG, "Permission granted.")
-            return true
-        } else {
-            Log.d(TAG, "Permission denied.")
-            return false
-        }
-    }
-    return false
 }
