@@ -2,13 +2,9 @@ package com.lyokone.location
 
 import android.Manifest
 import android.app.*
-import android.content.ActivityNotFoundException
-import android.content.Context
-import android.content.Intent
+import android.content.*
 import android.content.pm.PackageManager
-import android.os.Binder
-import android.os.Build
-import android.os.IBinder
+import android.os.*
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
@@ -17,14 +13,17 @@ import androidx.core.content.ContextCompat
 import io.flutter.plugin.common.MethodChannel
 import io.flutter.plugin.common.PluginRegistry
 
-const val kDefaultChannelName = "Location background service"
-const val kDefaultNotificationTitle = "Location background service running"
-const val kDefaultNotificationIconName = "navigation_empty_icon"
+// Centralized Constants to avoid conflict
+object NotificationConstants {
+    const val kDefaultChannelName: String = "Location background service"
+    const val kDefaultNotificationTitle: String = "Location background service running"
+    const val kDefaultNotificationIconName: String = "navigation_empty_icon"
+}
 
 data class NotificationOptions(
-        val channelName: String = kDefaultChannelName,
-        val title: String = kDefaultNotificationTitle,
-        val iconName: String = kDefaultNotificationIconName,
+        val channelName: String = NotificationConstants.kDefaultChannelName,
+        val title: String = NotificationConstants.kDefaultNotificationTitle,
+        val iconName: String = NotificationConstants.kDefaultNotificationIconName,
         val subtitle: String? = null,
         val description: String? = null,
         val color: Int? = null,
@@ -49,15 +48,11 @@ class BackgroundNotification(
     }
 
     private fun buildBringToFrontIntent(): PendingIntent? {
-        val intent: Intent? = context.packageManager
-                .getLaunchIntentForPackage(context.packageName)
-                ?.setPackage(null)
+        val intent = context.packageManager.getLaunchIntentForPackage(context.packageName)
                 ?.setFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED)
 
-        return if (intent != null) {
-            PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_IMMUTABLE)
-        } else {
-            null
+        return intent?.let {
+            PendingIntent.getActivity(context, 0, it, PendingIntent.FLAG_IMMUTABLE)
         }
     }
 
@@ -67,7 +62,7 @@ class BackgroundNotification(
             val channel = NotificationChannel(
                     channelId,
                     channelName,
-                    NotificationManager.IMPORTANCE_LOW
+                    NotificationManager.IMPORTANCE_NONE
             ).apply {
                 lockscreenVisibility = Notification.VISIBILITY_PRIVATE
             }
@@ -86,10 +81,13 @@ class BackgroundNotification(
         }
     }
 
-    private fun updateNotification(options: NotificationOptions, notify: Boolean) {
-        val iconId = getDrawableId(options.iconName).let {
-            if (it != 0) it else getDrawableId(kDefaultNotificationIconName)
-        }
+    private fun updateNotification(
+            options: NotificationOptions,
+            notify: Boolean
+    ) {
+        val iconId = getDrawableId(options.iconName).takeIf { it != 0 }
+                ?: getDrawableId(NotificationConstants.kDefaultNotificationIconName)
+
         builder = builder
                 .setContentTitle(options.title)
                 .setSmallIcon(iconId)
@@ -155,15 +153,8 @@ class FlutterLocationService : Service(), PluginRegistry.RequestPermissionsResul
     private var isForeground = false
     private var activity: Activity? = null
     private var backgroundNotification: BackgroundNotification? = null
-
-    var location: FlutterLocation? = null
-        private set
-
-    var result: MethodChannel.Result? = null
-
-    inner class LocalBinder : Binder() {
-        fun getService(): FlutterLocationService = this@FlutterLocationService
-    }
+    private var location: FlutterLocation? = null
+    private var result: MethodChannel.Result? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -184,30 +175,9 @@ class FlutterLocationService : Service(), PluginRegistry.RequestPermissionsResul
         super.onDestroy()
     }
 
-    fun requestNotificationPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            activity?.let {
-                ActivityCompat.requestPermissions(
-                        it,
-                        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
-                        REQUEST_NOTIFICATION_PERMISSION
-                )
-            }
-        }
-    }
-
     fun enableBackgroundMode() {
-        if (isForeground) {
-            Log.d(TAG, "Service already in foreground mode.")
-        } else {
+        if (!isForeground) {
             Log.d(TAG, "Start service in foreground mode.")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-                if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-                        != PackageManager.PERMISSION_GRANTED) {
-                    requestNotificationPermission()
-                    return
-                }
-            }
             val notification = backgroundNotification!!.build()
             startForeground(ONGOING_NOTIFICATION_ID, notification)
             isForeground = true
@@ -225,20 +195,16 @@ class FlutterLocationService : Service(), PluginRegistry.RequestPermissionsResul
         isForeground = false
     }
 
-    override fun onRequestPermissionsResult(
-            requestCode: Int,
-            permissions: Array<out String>,
-            grantResults: IntArray
-    ): Boolean {
-        if (requestCode == REQUEST_NOTIFICATION_PERMISSION) {
-            if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                if (isForeground) {
-                    val notification = backgroundNotification!!.build()
-                    startForeground(ONGOING_NOTIFICATION_ID, notification)
-                }
-                return true
-            }
+    fun changeNotificationOptions(options: NotificationOptions): Map<String, Any>? {
+        backgroundNotification?.updateOptions(options, isForeground)
+        return if (isForeground) {
+            mapOf("channelId" to CHANNEL_ID, "notificationId" to ONGOING_NOTIFICATION_ID)
+        } else {
+            null
         }
-        return false
+    }
+
+    inner class LocalBinder : Binder() {
+        fun getService(): FlutterLocationService = this@FlutterLocationService
     }
 }
