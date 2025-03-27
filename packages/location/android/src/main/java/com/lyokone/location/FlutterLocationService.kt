@@ -80,7 +80,7 @@ class BackgroundNotification(
         }
     }
 
-    private fun hasNotificationPermission(): Boolean {
+    private fun canShowNotification(): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             ContextCompat.checkSelfPermission(
                     context,
@@ -117,15 +117,17 @@ class BackgroundNotification(
         }
 
         if (notify) {
-            if (hasNotificationPermission()) {
-                try {
+            try {
+                if (canShowNotification()) {
                     val notificationManager = NotificationManagerCompat.from(context)
                     notificationManager.notify(notificationId, builder.build())
-                } catch (e: SecurityException) {
-                    Log.e(TAG, "Failed to show notification due to permission issue", e)
+                } else {
+                    Log.w(TAG, "Cannot show notification - POST_NOTIFICATIONS permission not granted")
                 }
-            } else {
-                Log.w(TAG, "Cannot show notification - POST_NOTIFICATIONS permission not granted")
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Failed to show notification due to permission issue", e)
+            } catch (e: Exception) {
+                Log.e(TAG, "Failed to show notification", e)
             }
         }
     }
@@ -156,6 +158,7 @@ class FlutterLocationService : Service(), PluginRegistry.RequestPermissionsResul
         private const val REQUEST_PERMISSIONS_REQUEST_CODE: Int = 641
         private const val ONGOING_NOTIFICATION_ID = 75418
         private const val CHANNEL_ID = "flutter_location_channel_01"
+        private const val REQUEST_NOTIFICATION_PERMISSION = 1001
     }
 
     // Binder given to clients
@@ -243,8 +246,19 @@ class FlutterLocationService : Service(), PluginRegistry.RequestPermissionsResul
         } else {
             location?.result = this.result
             location?.requestPermissions()
-            // result passed to Location reference here won't be needed
             this.result = null
+        }
+    }
+
+    fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            activity?.let {
+                ActivityCompat.requestPermissions(
+                        it,
+                        arrayOf(Manifest.permission.POST_NOTIFICATIONS),
+                        REQUEST_NOTIFICATION_PERMISSION
+                )
+            }
         }
     }
 
@@ -291,29 +305,43 @@ class FlutterLocationService : Service(), PluginRegistry.RequestPermissionsResul
             permissions: Array<out String>,
             grantResults: IntArray
     ): Boolean {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
-                requestCode == REQUEST_PERMISSIONS_REQUEST_CODE &&
-                permissions.size == 2 &&
-                permissions[0] == Manifest.permission.ACCESS_FINE_LOCATION &&
-                permissions[1] == Manifest.permission.ACCESS_BACKGROUND_LOCATION
-        ) {
-            if (grantResults[0] == PackageManager.PERMISSION_GRANTED &&
-                    grantResults[1] == PackageManager.PERMISSION_GRANTED) {
-                // Permissions granted, background mode can be enabled
-                enableBackgroundMode()
-                result?.success(1)
-                result = null
-            } else {
-                if (!shouldShowRequestBackgroundPermissionRationale()) {
-                    result?.error(
-                            "PERMISSION_DENIED_NEVER_ASK",
-                            "Background location permission denied forever - please open app settings",
-                            null
-                    )
-                } else {
-                    result?.error("PERMISSION_DENIED", "Background location permission denied", null)
+        when (requestCode) {
+            REQUEST_PERMISSIONS_REQUEST_CODE -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q &&
+                        permissions.size == 2 &&
+                        permissions[0] == Manifest.permission.ACCESS_FINE_LOCATION &&
+                        permissions[1] == Manifest.permission.ACCESS_BACKGROUND_LOCATION
+                ) {
+                    if (grantResults[0] == PackageManager.PERMISSION_GRANTED &&
+                            grantResults[1] == PackageManager.PERMISSION_GRANTED) {
+                        enableBackgroundMode()
+                        result?.success(1)
+                        result = null
+                        return true
+                    } else {
+                        if (!shouldShowRequestBackgroundPermissionRationale()) {
+                            result?.error(
+                                    "PERMISSION_DENIED_NEVER_ASK",
+                                    "Background location permission denied forever - please open app settings",
+                                    null
+                            )
+                        } else {
+                            result?.error("PERMISSION_DENIED", "Background location permission denied", null)
+                        }
+                        result = null
+                        return true
+                    }
                 }
-                result = null
+            }
+            REQUEST_NOTIFICATION_PERMISSION -> {
+                if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                    // Restart service or update notifications if needed
+                    if (isForeground) {
+                        val notification = backgroundNotification!!.build()
+                        startForeground(ONGOING_NOTIFICATION_ID, notification)
+                    }
+                    return true
+                }
             }
         }
         return false
