@@ -19,6 +19,7 @@ import android.util.SparseArray;
 
 import androidx.annotation.Nullable;
 import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.common.api.ResolvableApiException;
@@ -47,7 +48,6 @@ public class FlutterLocation
 
     private static final int REQUEST_PERMISSIONS_REQUEST_CODE = 34;
     private static final int REQUEST_CHECK_SETTINGS = 0x1;
-
     private static final int GPS_ENABLE_REQUEST = 0x1001;
 
     public FusedLocationProviderClient mFusedLocationClient;
@@ -68,17 +68,12 @@ public class FlutterLocation
     private float distanceFilter = 0f;
 
     public EventSink events;
-
-    // Store result until a permission check is resolved
     public Result result;
-
-    // Store the result for the requestService, used in ActivityResult
     private Result requestServiceResult;
-
-    // Store result until a location is getting resolved
     public Result getLocationResult;
 
     private final LocationManager locationManager;
+    private final Context applicationContext;
 
     public SparseArray<Integer> mapFlutterAccuracy = new SparseArray<Integer>() {
         {
@@ -92,6 +87,7 @@ public class FlutterLocation
     };
 
     FlutterLocation(Context applicationContext, @Nullable Activity activity) {
+        this.applicationContext = applicationContext;
         this.activity = activity;
         this.locationManager = (LocationManager) applicationContext.getSystemService(Context.LOCATION_SERVICE);
     }
@@ -111,8 +107,12 @@ public class FlutterLocation
             }
             mFusedLocationClient = null;
             mSettingsClient = null;
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && locationManager != null) {
-                locationManager.removeNmeaListener(mMessageListener);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && locationManager != null && mMessageListener != null) {
+                try {
+                    locationManager.removeNmeaListener(mMessageListener);
+                } catch (SecurityException e) {
+                    Log.e(TAG, "Failed to remove NMEA listener", e);
+                }
                 mMessageListener = null;
             }
         }
@@ -127,7 +127,6 @@ public class FlutterLocation
         if (requestCode == REQUEST_PERMISSIONS_REQUEST_CODE && permissions.length == 1
                 && permissions[0].equals(Manifest.permission.ACCESS_FINE_LOCATION)) {
             if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                // Checks if this permission was automatically triggered by a location request
                 if (getLocationResult != null || events != null) {
                     startRequestingLocation();
                 }
@@ -154,7 +153,6 @@ public class FlutterLocation
             return true;
         }
         return false;
-
     }
 
     @Override
@@ -212,14 +210,16 @@ public class FlutterLocation
         }
     }
 
-    /**
-     * Creates a callback for receiving location events.
-     */
     private void createLocationCallback() {
         if (mLocationCallback != null) {
-            mFusedLocationClient.removeLocationUpdates(mLocationCallback);
+            try {
+                mFusedLocationClient.removeLocationUpdates(mLocationCallback);
+            } catch (SecurityException e) {
+                Log.e(TAG, "Failed to remove location updates", e);
+            }
             mLocationCallback = null;
         }
+
         mLocationCallback = new LocationCallback() {
             @Override
             public void onLocationResult(LocationResult locationResult) {
@@ -253,7 +253,6 @@ public class FlutterLocation
                     loc.put("isMock", (double) 0);
                 }
 
-                // Using NMEA Data to get MSL level altitude
                 if (mLastMslAltitude == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.N) {
                     loc.put("altitude", location.getAltitude());
                 } else {
@@ -274,8 +273,12 @@ public class FlutterLocation
                 if (events != null) {
                     events.success(loc);
                 } else {
-                    if (mFusedLocationClient != null) {
-                        mFusedLocationClient.removeLocationUpdates(mLocationCallback);
+                    try {
+                        if (mFusedLocationClient != null) {
+                            mFusedLocationClient.removeLocationUpdates(mLocationCallback);
+                        }
+                    } catch (SecurityException e) {
+                        Log.e(TAG, "Failed to remove location updates", e);
                     }
                 }
             }
@@ -287,8 +290,6 @@ public class FlutterLocation
                     String[] tokens = message.split(",");
                     String type = tokens[0];
 
-                    // Parse altitude above sea level, Detailed description of NMEA string here
-                    // http://aprs.gids.nl/nmea/#gga
                     if (type.startsWith("$GPGGA") && tokens.length > 9) {
                         if (!tokens[9].isEmpty()) {
                             mLastMslAltitude = Double.parseDouble(tokens[9]);
@@ -299,41 +300,27 @@ public class FlutterLocation
         }
     }
 
-    /**
-     * Sets up the location request. Android has two location request settings:
-     */
     private void createLocationRequest() {
         mLocationRequest = LocationRequest.create();
-
         mLocationRequest.setInterval(this.updateIntervalMilliseconds);
         mLocationRequest.setFastestInterval(this.fastestUpdateIntervalMilliseconds);
         mLocationRequest.setPriority(this.locationAccuracy);
         mLocationRequest.setSmallestDisplacement(this.distanceFilter);
     }
 
-    /**
-     * Uses a
-     * {@link com.google.android.gms.location.LocationSettingsRequest.Builder} to
-     * build a {@link com.google.android.gms.location.LocationSettingsRequest} that
-     * is used for checking if a device has the needed location settings.
-     */
     private void buildLocationSettingsRequest() {
         LocationSettingsRequest.Builder builder = new LocationSettingsRequest.Builder();
         builder.addLocationRequest(mLocationRequest);
         mLocationSettingsRequest = builder.build();
     }
 
-    /**
-     * Return the current state of the permissions needed.
-     */
     public boolean checkPermissions() {
         if (this.activity == null) {
             result.error("MISSING_ACTIVITY", "You should not checkPermissions activation outside of an activity.", null);
             throw new ActivityNotFoundException();
         }
-        int locationPermissionState = ActivityCompat.checkSelfPermission(activity,
-                Manifest.permission.ACCESS_FINE_LOCATION);
-        return locationPermissionState == PackageManager.PERMISSION_GRANTED;
+        return ContextCompat.checkSelfPermission(activity,
+                Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED;
     }
 
     public void requestPermissions() {
@@ -356,16 +343,20 @@ public class FlutterLocation
         return ActivityCompat.shouldShowRequestPermissionRationale(activity, Manifest.permission.ACCESS_FINE_LOCATION);
     }
 
-    /**
-     * Checks whether location services is enabled.
-     */
     public boolean checkServiceEnabled() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
             return locationManager.isLocationEnabled();
         }
 
-        boolean gps_enabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
-        boolean network_enabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+        boolean gps_enabled = false;
+        boolean network_enabled = false;
+
+        try {
+            gps_enabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER);
+            network_enabled = locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to check provider status", e);
+        }
 
         return gps_enabled || network_enabled;
     }
@@ -394,8 +385,6 @@ public class FlutterLocation
                         switch (statusCode) {
                             case LocationSettingsStatusCodes.RESOLUTION_REQUIRED:
                                 try {
-                                    // Show the dialog by calling startResolutionForResult(), and check the
-                                    // result in onActivityResult().
                                     rae.startResolutionForResult(activity, GPS_ENABLE_REQUEST);
                                 } catch (IntentSender.SendIntentException sie) {
                                     requestServiceResult.error("SERVICE_STATUS_ERROR", "Could not resolve location request",
@@ -408,8 +397,6 @@ public class FlutterLocation
                                 break;
                         }
                     } else {
-                        // This should not happen according to Android documentation but it has been
-                        // observed on some phones.
                         requestServiceResult.error("SERVICE_STATUS_ERROR", "Unexpected error type received", null);
                     }
                 });
@@ -420,15 +407,34 @@ public class FlutterLocation
             result.error("MISSING_ACTIVITY", "You should not requestLocation activation outside of an activity.", null);
             throw new ActivityNotFoundException();
         }
+
+        // Check for location permission first
+        if (ContextCompat.checkSelfPermission(activity, Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            sendError("PERMISSION_DENIED", "Location permission not granted", null);
+            return;
+        }
+
         mSettingsClient.checkLocationSettings(mLocationSettingsRequest)
                 .addOnSuccessListener(activity, locationSettingsResponse -> {
                     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                        locationManager.addNmeaListener(mMessageListener, null);
+                        try {
+                            locationManager.addNmeaListener(mMessageListener, null);
+                        } catch (SecurityException e) {
+                            Log.e(TAG, "Failed to add NMEA listener", e);
+                            sendError("PERMISSION_DENIED", "Location permission required for NMEA data", null);
+                            return;
+                        }
                     }
 
-                    if (mFusedLocationClient != null) {
-                        mFusedLocationClient
-                                .requestLocationUpdates(mLocationRequest, mLocationCallback, Looper.myLooper());
+                    try {
+                        if (mFusedLocationClient != null) {
+                            mFusedLocationClient
+                                    .requestLocationUpdates(mLocationRequest, mLocationCallback, Looper.myLooper());
+                        }
+                    } catch (SecurityException e) {
+                        Log.e(TAG, "Failed to request location updates", e);
+                        sendError("PERMISSION_DENIED", "Location permission required for updates", null);
                     }
                 }).addOnFailureListener(activity, e -> {
                     if (e instanceof ResolvableApiException) {
@@ -436,8 +442,6 @@ public class FlutterLocation
                         int statusCode = rae.getStatusCode();
                         if (statusCode == LocationSettingsStatusCodes.RESOLUTION_REQUIRED) {
                             try {
-                                // Show the dialog by calling startResolutionForResult(), and check the
-                                // result in onActivityResult().
                                 rae.startResolutionForResult(activity, REQUEST_CHECK_SETTINGS);
                             } catch (IntentSender.SendIntentException sie) {
                                 Log.i(TAG, "PendingIntent unable to execute request.");
@@ -446,18 +450,24 @@ public class FlutterLocation
                     } else {
                         ApiException ae = (ApiException) e;
                         int statusCode = ae.getStatusCode();
-                        if (statusCode == LocationSettingsStatusCodes.SETTINGS_CHANGE_UNAVAILABLE) {// This error code happens during AirPlane mode.
+                        if (statusCode == LocationSettingsStatusCodes.SETTINGS_CHANGE_UNAVAILABLE) {
                             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
-                                locationManager.addNmeaListener(mMessageListener, null);
+                                try {
+                                    locationManager.addNmeaListener(mMessageListener, null);
+                                } catch (SecurityException se) {
+                                    Log.e(TAG, "Failed to add NMEA listener", se);
+                                }
                             }
-                            mFusedLocationClient.requestLocationUpdates(mLocationRequest, mLocationCallback,
-                                    Looper.myLooper());
-                        } else {// This should not happen according to Android documentation but it has been
-                            // observed on some phones.
+                            try {
+                                mFusedLocationClient.requestLocationUpdates(mLocationRequest, mLocationCallback,
+                                        Looper.myLooper());
+                            } catch (SecurityException se) {
+                                Log.e(TAG, "Failed to request location updates", se);
+                            }
+                        } else {
                             sendError("UNEXPECTED_ERROR", e.getMessage(), null);
                         }
                     }
                 });
     }
-
 }
