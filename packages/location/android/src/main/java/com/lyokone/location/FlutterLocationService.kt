@@ -208,3 +208,19 @@ class FlutterLocationService : Service(), PluginRegistry.RequestPermissionsResul
         fun getService(): FlutterLocationService = this@FlutterLocationService
     }
 }
+override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+): Boolean {
+    if (requestCode == REQUEST_PERMISSIONS_REQUEST_CODE) {
+        if (grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            Log.d(TAG, "Permission granted.")
+            return true
+        } else {
+            Log.d(TAG, "Permission denied.")
+            return false
+        }
+    }
+    return false
+}
